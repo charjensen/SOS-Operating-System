@@ -1,0 +1,95 @@
+qemu-system-x86_64 -cpu qemu32 -m 16 -k en-us -drive format=raw,file=SOS.dsk
+asm volatile ("pushfl\n")
+asm volatile ("popl %0\n": "=r"(console.cpu.eflags));
+% run 1100 2
+asm volatile ("movl %0, %%edi\n": :"m"(console.cpu.edi));
+asm volatile ("pushl %0\n": :"m"(p->cpu.ss));
+$./gcc2 -o test.out test.c
+asm volatile ("pushl %0\n"::"m"(console.cpu.eflags));
+asm volatile ("movl $0x10, %eax\n"
+"movl %eax, %ds\n"
+"movl %eax, %es\n"
+"movl %eax, %fs\n"
+"movl %eax, %gs\n");
+
+asm volatile ("movl %%esp,%0" : "=r"(console.cpu.esp));
+
+// TODO: Save flags in the console's PCB
+	asm volatile ("pushfl\n");
+	asm volatile ("popl %0\n": "=r"(console.cpu.eflags));
+
+	// TODO: Save current stack pointers (ESP and EBP) in the console's PCB
+	asm volatile ("movl %%esp,%0" : "=r"(console.cpu.esp));
+	asm volatile ("movl %%ebp,%0" : "=r"(console.cpu.ebp));
+
+	// save resume point: we will resume at forward label 1 (below)
+	asm volatile ("movl $1f,%0" : "=r"(console.cpu.eip));
+	
+	// fill data in the PCB for the user program (defined in the
+    	// beginning of this file)
+    	// TODO: fill into user_program the following values
+    	//          a) memory base
+	user_program.memory_base = ((uint32_t) load_base);
+    	//          b) memory limit
+	user_program.memory_limit = bytes_needed;
+    	//          c) stack segment (SS)
+	user_program.cpu.ss = 0x23;
+	//          d) stack pointer (ESP): stack should begin from (end of process space - 4KB)
+	user_program.cpu.esp = user_program.memory_limit - 4096;
+    	//          e) code segment (CS)
+	user_program.cpu.cs = 0x1B;
+	//          f) instruction pointer (EIP)
+	user_program.cpu.eip = 0x0000;
+    	//          g) flags (EFLAGS)
+	user_program.cpu.eflags = console.cpu.eflags;
+
+// TODO: set TSS.esp0 
+	TSS.esp0 = p->memory_base + p->memory_limit;
+
+	// set up GDT entries 3 and 4
+	// TODO: set user GDT code/data segment to base = p->memory_base,
+	// limit = p->memory_limit, flag, and access byte (see kernel_only.h
+    	// for definition of the GDT structure)
+	gdt[3].limit_0_15 = p->memory_limit; // already truncates between uint8_t and uint32_t
+	gdt[3].base_0_15 = p->memory_base; //same as above
+	gdt[3].base_16_23 = (p->memory_base>>16); //shift it until base is in right spot
+	gdt[3].access_byte = 0xFA; //user mode code segement
+	gdt[3].limit_and_flag = ((p->memory_limit>>16 & 0xF) | 0b0100<<4);
+	gdt[3].base_24_31 = p->memory_base>>24;
+
+	//same as above except for gdt entry 4, for the data segment
+	gdt[4].limit_0_15 = p->memory_limit;
+	gdt[4].base_0_15 = p->memory_base;
+	gdt[4].base_16_23 = (p->memory_base>>16);
+	gdt[4].access_byte = 0xF2;
+	gdt[4].limit_and_flag = ((p->memory_limit>>16 & 0xF) | 0b0100<<4);
+	gdt[4].base_24_31 = p->memory_base>>24;
+
+	// TODO: load EDI, ESI, EAX, EBX, EDX, EBP with values from
+    	// process p's PCB
+	asm volatile ("movl %0, %%edi\n": :"m"(p->cpu.edi));
+	asm volatile ("movl %0, %%esi\n": :"m"(p->cpu.esi));
+	asm volatile ("movl %0, %%eax\n": :"m"(p->cpu.eax));
+	asm volatile ("movl %0, %%ebx\n": :"m"(p->cpu.ebx));
+	asm volatile ("movl %0, %%edx\n": :"m"(p->cpu.edx));
+	asm volatile ("movl %0, %%ebp\n": :"m"(p->cpu.ebp));
+
+	// TODO: Push into stack the following values from process p's PCB: SS,
+    	// ESP, EFLAGS, CS, EIP (in this order)
+	asm volatile ("pushl %0\n": :"m"(p->cpu.ss));
+	asm volatile ("pushl %0\n": :"m"(p->cpu.esp));
+	asm volatile ("pushl %0\n": :"m"(p->cpu.eflags));
+	asm volatile ("pushl %0\n": :"m"(p->cpu.cs));
+	asm volatile ("pushl %0\n": :"m"(p->cpu.eip));
+	
+	// TODO: load ECX with value from process p's PCB
+	asm volatile ("movl %0, %%ecx\n": :"m"(p->cpu.ecx));
+	
+	// TODO: load ES, DS, FS, GS registers with user data segment selector
+	asm volatile ("pushl $0x23\n" "popl %es\n");
+	asm volatile ("pushl $0x23\n" "popl %ds\n");	
+	asm volatile ("pushl $0x23\n" "popl %fs\n");
+	asm volatile ("pushl $0x23\n" "popl %gs\n");
+	
+	// TODO: execute the IRETL instruction
+	asm volatile ("IRETL\n");
